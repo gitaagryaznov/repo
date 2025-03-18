@@ -1,0 +1,86 @@
+import logging
+import requests
+import os
+from telegram import Bot
+from telegram.ext import Application, CommandHandler, MessageHandler, filters
+from datetime import time
+import asyncio
+import nest_asyncio
+
+# Применяем nest_asyncio для обработки вложенных циклов событий
+nest_asyncio.apply()
+
+# Настройка логгирования
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Токен вашего бота
+TOKEN = os.getenv("TOKEN")  # Используем переменную окружения
+
+if not TOKEN:
+    raise ValueError("Токен не найден. Убедитесь, что переменная окружения TOKEN установлена.")
+
+# Функция для получения курсов криптовалют
+def get_crypto_prices():
+    url = 'https://api.coingecko.com/api/v3/simple/price'
+    params = {
+        'ids': 'bitcoin,ethereum,litecoin,the-open-network,tramcoin',
+        'vs_currencies': 'usd'
+    }
+    response = requests.get(url, params=params)
+    if response.status_code == 200:
+        return response.json()
+    else:
+        logger.error("Ошибка при получении данных о курсах криптовалют")
+        return None
+
+# Функция для отправки сообщения с курсами криптовалют
+async def send_crypto_prices(chat_id, context):
+    prices = get_crypto_prices()
+    if prices:
+        message = "Курсы криптовалют на сегодня:\n"
+        for crypto, price in prices.items():
+            crypto_name = {
+                'bitcoin': 'Bitcoin',
+                'ethereum': 'Ethereum',
+                'litecoin': 'Litecoin',
+                'the-open-network': 'TON',
+                'tramcoin': 'Tramcoin'
+            }.get(crypto, crypto.capitalize())
+            message += f"{crypto_name}: ${price['usd']}\n"
+        await context.bot.send_message(chat_id=chat_id, text=message)
+    else:
+        await context.bot.send_message(chat_id=chat_id, text="Не удалось получить курсы криптовалют.")
+
+# Обработчик команды /start
+async def start(update, context):
+    await update.message.reply_text("Привет! Я КиберЛеха. Буду присылать тебе курсы криптовалют каждое утро в 7:00. Также можешь написать 'Леха привет', чтобы получить текущие курсы.")
+    
+    # Планируем задачу на 7:00 каждый день
+    chat_id = update.message.chat_id
+    context.job_queue.run_daily(send_crypto_prices, time=time(hour=7, minute=0), days=(0, 1, 2, 3, 4, 5, 6), chat_id=chat_id, context=context)
+
+# Обработчик текстовых сообщений
+async def handle_message(update, context):
+    text = update.message.text.lower()
+    if "леха привет" in text:
+        await send_crypto_prices(update.message.chat_id, context)
+
+# Основная функция
+async def main():
+    # Создаем приложение
+    application = Application.builder().token(TOKEN).build()
+
+    # Регистрируем обработчик команды /start
+    application.add_handler(CommandHandler("start", start))
+
+    # Регистрируем обработчик текстовых сообщений
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    # Запускаем бота
+    await application.run_polling()
+
+if __name__ == '__main__':
+    # Используем существующий цикл событий
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())
